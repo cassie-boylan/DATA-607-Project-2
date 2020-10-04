@@ -1,0 +1,252 @@
+---
+title: "Project 2"
+author: "Cassie Boylan"
+date: "10/3/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(readr)
+library(data.table)
+library(visdat)
+library(RCurl)
+```
+
+
+<!--detached plyr per recomendation online as my groupby() was not working - now preventing knitting to html & publishing so am commenting out
+#```{r}
+#detach(package:plyr)
+-->
+
+
+## Dataset 1 - Global TB rates
+
+```{r}
+NAMES_tb <- read.table("https://raw.githubusercontent.com/rodrigomf5/Tidydata/master/tb.csv", nrow = 1, stringsAsFactors = FALSE, sep = ",")
+
+DATA_tb <- read.table("https://raw.githubusercontent.com/rodrigomf5/Tidydata/master/tb.csv", skip = 1, stringsAsFactors = FALSE, sep = ",")
+
+tb <- DATA_tb[, 1:length(NAMES_tb)]
+names(tb) <- NAMES_tb
+```
+[credit for structure]:
+(https://stackoverflow.com/questions/38311808/more-columns-than-column-names/38311962)
+
+
+moving tb dataset from wide to long
+```{r}
+tb_clean <- tb %>%
+  gather(key="demo", value="incidence", "new_sp":"new_sp_fu")
+```
+
+Since the disparate variables of the demo (short for demographic) column are not separated by any non-alphanumeric characters, I am using str_extract() inside a mutate instead to pull out variables gender and age range instead of a separate() stmt.
+
+Both new variables will be factor variables in that they have a fixed select number of values they could be, so I am also casting both variables to factor inside my mutate.
+
+Now that I have broken down the multi-variable column demo, I can drop this column from the dataset. I am not interested in the observations that do not have gender or age range assigned to them.
+```{r}
+#tb_clean <- tb_clean %>%
+#  separate("demo", into=c("demo"), sep="[a-z]")
+
+tb_clean <- tb_clean %>%
+  mutate(gender = as.factor(str_extract(demo, "f|m")),
+         age_range = as.factor(str_extract(demo,"[0-9]{3,4}"))) %>%
+  select(-demo)
+
+
+```
+
+It is noticeable that there are many NA values in this dataset.
+```{r}
+sum(is.na(tb_clean))
+```
+
+```{r}
+vis_miss(tb_clean)
+```
+Observations without the demographic variables are not entirely helpful for analysis and since I have no way to impute what they could be I will drop them.
+```{r}
+tb_clean <- tb_clean %>%
+  filter(!is.na(age_range),
+         !is.na(gender))
+```
+
+Looking at the data, I suspect that the NA values are more often happening in earlier years where data may have been more difficult to ascertain.  I am going to arrange by year and then call vis_miss.  Should my suspicion be correct, the missing values should all show as sequential (ie. data is missing at random but not completely at random).
+```{r}
+tb_clean <- tb_clean %>%
+  arrange(year)
+vis_miss(tb_clean)
+```
+Looks like I am correct.  To see at around what year did frequency of NA values drop off, I will filter and count only the observations with NA in the incidence column and then plot.
+
+*Update: I dont know what happened here - the filter and plot worked beautifully. My only change on re-running was the detachment of package plyr which was advised in order to get my groupby() statments to work.
+#```{r}
+tb_missing <- tb_clean %>%
+  filter(is.na(incidence)) %>%
+  count("year")
+
+ggplot(tb_missing, aes(x=year, y=freq)) + geom_col()
+```
+
+It appears that only around 1995 was data really able to be collected in a statistically significant way.  It could still be helpful to retain incidence rates from the 80s as that can certainly be insightful for certain countries where this data was collected successfully.  However, I am looking to apply summary statistics across countries, and the quality/accuracy of this analysis will significantly increase without so many missing values; therefore I am going to drop all observational records from 1980-1995.
+```{r}
+tb_clean$year <- as.numeric(tb_clean$year)
+
+exclude <- c(1980:1995)
+
+tb_clean<- tb_clean %>%
+  filter(!(year %in% exclude))
+```
+
+At this point, let's assume that where values are NA in the incidence column, no tb cases were found.
+```{r}
+tb_clean[is.na(tb_clean)]<- 0
+sum(is.na(tb_clean))
+```
+
+```{r}
+tb_clean %>% group_by(iso2, gender) %>%   summarize(total_tb = sum(incidence)) %>%               arrange(desc(total_tb))
+```
+
+## Dataset 2 - Titanic
+```{r}
+NAMES <- read.table("https://raw.githubusercontent.com/cassie-boylan/DATA-607-Project-2/main/titanic.csv", nrow = 1, stringsAsFactors = FALSE, sep = ",")
+
+DATA <- read.table("https://raw.githubusercontent.com/cassie-boylan/DATA-607-Project-2/main/titanic.csv", skip = 1, stringsAsFactors = FALSE, sep = ",", na.strings=c("", NA))
+
+titanic <- DATA[, 1:12]
+names(titanic) <- NAMES
+```
+
+
+```{r}
+titanic_clean <- titanic %>%
+  separate(Name, into=c("Last.Name", "First.Name"), sep=",") %>%
+  mutate(Age = round(Age,0))
+
+names(titanic_clean)[8] <- "Sibling.Spouse.Count"
+names(titanic_clean)[9] <- "Parent.Child.Count"
+
+```
+Calling sum of NA values, there are 177 values that are NA.  Calling a plot of the dataset utilizing vis_dat,  I can see that all the NA values are within the variable Age. (I then went back and assigned na.string to include "" as NA values - this revealed the extreme number of missing values in variable Cabin)
+
+I can also see that all the dummy variables of this dataset are set as numeric. They should be represented as factors.
+```{r}
+sum(is.na(titanic_clean))
+vis_dat(titanic_clean)
+```
+
+```{r}
+#tried to do a for loop to test/pull out dummy vars so I could cast all at once, threw error
+
+#variable <- colnames(titanic_clean)
+
+#for (i in 1:length(variable)) {
+#  if (max(var[i]) ==  1 & min(var[i]) == 0)
+#      {
+#    vars_that_are_dummies == var[i]
+#    }
+#}
+
+#titanic_clean %>%
+#  mutate_at(vars_that_are_dummies, as.factor)
+```
+
+Since this age is a numeric value, imputing with the mean value seems reasonable.  I ran a quick five num and confirmed from IQR and confirmed that mean is similar to median and can be considered a measure of center.
+```{r}
+mean_age <- round(mean(titanic_clean$Age, na.rm=TRUE),0)
+
+fivenum(titanic_clean$Age, na.rm=TRUE)
+
+titanic_clean <- titanic_clean %>%
+  mutate(Age = replace_na(Age, mean_age))
+```
+
+A quick look through the Cabin values does show that this variable does not carry any real meaning so I am dropping column.
+```{r}
+titanic_clean <- titanic_clean %>%
+  select(-Cabin)
+```
+
+#How many of each gender & socio-economic class survived the Titanic crash?  
+It appears that if you were a female of first or second class, your odds of survival look pretty good. Women of first and second class had a survival rate of 97% and 92%
+Only 50% of woman of the third class survived, which was still better than men of the first class at 37%.  
+Most saddening is the survival rate of men of the third class at 15%
+```{r message=FALSE}
+titanic_sum <- titanic_clean %>%
+  group_by(Pclass, Sex) %>% 
+  summarize(survived=round(sum(Survived)/n(),2),
+            total_passengers = n(),
+            dead_passengers = total_passengers - round((survived * total_passengers),0))
+```
+
+
+
+##Datset 3 - Religion vs Income
+This dataset maintains religion and yearly income reported
+```{r}
+x <- getURL("https://raw.githubusercontent.com/rodrigomf5/Tidydata/master/relinc.csv")
+
+religion_income <- read_csv(x)
+```
+moving religion_income dataset long to wide
+```{r}
+religion_income <- religion_income %>%
+  gather(key="income", value="frequency", "<10k":"refused", -religion) %>%
+  filter(religion != "refused") %>%
+  arrange(desc(frequency))
+```
+
+```{r}
+unique(religion_income$religion)
+```
+
+```{r}
+religion_income_ca <- religion_income %>%
+  filter(religion == "Catholic") %>%
+  mutate(percentage = round(frequency/sum(frequency),2))
+```
+
+```{r}
+religion_income <- religion_income %>%
+  mutate(income_level = case_when(
+    income %in% c("75-100k","100-150k", ">150k") ~ "Wealthy", 
+    income %in% c("50-75k","40-50k","30-40k") ~"Middle Class", 
+    income %in% c("20-30k","10-20k", "<10k")~ "Blue Collar",
+    TRUE ~ "unknown"))
+```
+
+```{r}
+by_class <- religion_income %>%
+  group_by(income_level) %>%
+  summarise(ppl_total = sum(frequency)) %>%
+  arrange(desc(ppl_total))
+```
+
+```{r}
+by_religion <- religion_income %>%
+  group_by(religion) %>%
+  summarise(ppl_total = sum(frequency)) %>%
+  arrange(desc(ppl_total))
+```
+
+```{r}
+religion_income2 <- religion_income %>%
+  group_by(income_level, religion) %>%
+  mutate(religion_total = sum(frequency)) %>%
+  select(religion, income_level, religion_total) %>%
+  arrange(religion, income_level) %>%
+  unique()
+  
+```
+
+
